@@ -104,6 +104,10 @@ function commentHTML(c) {
       <button onclick="addToChecklist('${c.thread}', '${c.timestamp}', '${c.user}', '${c.comment.replace(/'/g, "\\'")}')">＋</button>
       <button onclick="jumpToTask('${c.timestamp}')">📝</button>
     </div>
+    <div class="comment">
+      <span class="room-tag">${c.room}</span>
+      <b>${c.user}</b>: ${c.comment}
+    </div>
   `;
 }
 
