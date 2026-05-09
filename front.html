@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>SR Thread Master</title>
+  <style>
+    .tabs { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .tab { padding: 8px 12px; cursor: pointer; border-radius: 5px; color: white; }
+    .tab.active { border: 2px solid black; }
+    .pin { margin-right: 5px; cursor: pointer; }
+    .thread-window { display: none; padding: 10px; border-radius: 5px; }
+    .thread-window.active { display: block; }
+    .search-box { margin-bottom: 15px; }
+    .done {
+    color: #999;
+    text-decoration: line-through;
+  }
+  .priority-high {
+    border-left: 6px solid #ff4d4d;
+    background: #ffe5e5;
+  }
+  .priority-medium {
+    border-left: 6px solid #ffa64d;
+    background: #fff0e0;
+  }
+  .priority-low {
+    border-left: 6px solid #4da6ff;
+    background: #e6f2ff;
+  }
+
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+
+</head>
+<body>
+
+<h2>スレッド一覧</h2>
+<div class="tabs" id="tabs"></div>
+
+<div class="search-box">
+  <input id="search" type="text" placeholder="コメント検索（リアルタイム）" style="width: 300px; padding: 5px;">
+</div>
+
+<h2>コメント</h2>
+<div id="windows"></div>
+
+<script>
+
+// スレッドごとの色を保持
+const threadColors = {};
+const pinnedThreads = JSON.parse(localStorage.getItem("pinnedThreads") || "[]");
+
+let latestData = []; // 検索用に保持
+
+// ランダムカラー生成
+function randomColor() {
+  return "#" + Math.floor(Math.random()*16777215).toString(16);
+}
+
+
+function renderTabs(threads) {
+  const tabs = document.getElementById("tabs");
+  tabs.innerHTML = "";
+
+  threads.forEach((t, i) => {
+    if (!threadColors[t]) threadColors[t] = randomColor();
+
+    const tab = document.createElement("div");
+    tab.className = "tab" + (i === 0 ? " active" : "");
+    tab.style.background = threadColors[t];
+
+    const pin = document.createElement("span");
+    pin.className = "pin";
+    pin.innerText = pinnedThreads.includes(t) ? "📌" : "📍";
+    pin.onclick = (e) => {
+      e.stopPropagation();
+      togglePin(t);
+    };
+
+    tab.appendChild(pin);
+    tab.appendChild(document.createTextNode(t));
+    tab.onclick = () => switchTab(t);
+
+    tabs.appendChild(tab);
+  });
+}
+
+function switchTab(thread) {
+  document.querySelectorAll(".tab").forEach(t => {
+    t.classList.toggle("active", t.innerText.includes(thread));
+  });
+
+  document.querySelectorAll(".thread-window").forEach(w => {
+    w.classList.toggle("active", w.id === "win-" + thread);
+  });
+
+  applySearch(); // タブ切り替え時にも検索反映
+}
+
+function togglePin(thread) {
+  if (pinnedThreads.includes(thread)) {
+    pinnedThreads.splice(pinnedThreads.indexOf(thread), 1);
+  } else {
+    pinnedThreads.push(thread);
+  }
+  localStorage.setItem("pinnedThreads", JSON.stringify(pinnedThreads));
+  load();
+}
+
+// 🔍 コメント検索機能
+document.getElementById("search").addEventListener("input", applySearch);
+
+function applySearch() {
+  const keyword = document.getElementById("search").value.toLowerCase();
+
+  const activeWin = document.querySelector(".thread-window.active");
+  if (!activeWin) return;
+
+  const thread = activeWin.id.replace("win-", "");
+
+  let filtered = latestData;
+
+  if (thread !== "ALL") {
+    filtered = filtered.filter(d => d.thread_key === thread);
+  }
+
+  if (keyword) {
+    filtered = filtered.filter(d =>
+      d.comment.toLowerCase().includes(keyword) ||
+      d.user.toLowerCase().includes(keyword)
+    );
+  }
+
+  activeWin.innerHTML = filtered
+    .map(d => `<p class="comment"><b>${d.user}</b>: ${d.comment}</p>`)
+    .join("");
+}
+
+setInterval(load, 3000);
+load();
+
+const GAS_URL = "1Pz7E_vPQU6mfI5gaWXToklBaVwT5J0sinAuc7eVKNo0";
+
+async function load() {
+  const res = await fetch(GAS_URL);
+  const json = await res.json();
+
+  latestData = json.comments;
+
+  // ▼ GAS からチェックリストを受け取る
+  checklist = {};
+  json.checklist.forEach(c => {
+    if (!checklist[c.thread]) checklist[c.thread] = [];
+    checklist[c.thread].push(c);
+  });
+
+  // ▼ order で並び替え
+  Object.keys(checklist).forEach(t => {
+    checklist[t].sort((a, b) => a.order - b.order);
+  });
+
+  renderTabs(threads);
+  renderWindows(threads, latestData);
+}
+
+
+
+
+
+
+function renderWindows(threads, data) {
+  const windows = document.getElementById("windows");
+  windows.innerHTML = "";
+
+  threads.forEach((t, i) => {
+    const win = document.createElement("div");
+    win.id = "win-" + t;
+    win.className = "thread-window" + (i === 0 ? " active" : "");
+    win.style.background = threadColors[t] + "20";
+
+    // ▼ 1) DONEタブ（完了コメント専用）
+    if (t === "DONE") {
+      const complete = data.filter(d => d.status === "完了");
+
+      win.innerHTML = complete
+        .map(d => `
+          <p class="comment done"
+             ondblclick="editComment('${d.timestamp}', '${d.user}', '${d.comment.replace(/'/g, "\\'")}')"
+             onclick="completeComment('${d.timestamp}', '${d.user}')">
+             <b>${d.user}</b>: ${d.comment}
+          </p>
+        `)
+        .join("");
+
+      windows.appendChild(win);
+      return;
+    }
+
+    // ▼ 2) TODO-◯◯（スレッド別チェックリスト）
+    if (t.startsWith("TODO-")) {
+  const thread = t.replace("TODO-", "");
+  const items = checklist[thread] || [];
+
+  win.innerHTML = `
+    <ul id="todo-list-${thread}" class="todo-list">
+      ${items
+        .map(
+          (c, i) => `
+        <li data-index="${i}" data-timestamp="${c.timestamp}" class="priority-${c.priority}">
+  <input type="checkbox" ${c.done ? "checked" : ""} 
+         onclick="toggleChecklist('${thread}', ${c.timestamp})">
+
+  <b>${c.user}</b>: ${c.comment}
+
+  <select onchange="changePriority('${c.timestamp}', this.value)">
+    <option value="high" ${c.priority === "high" ? "selected" : ""}>高</option>
+    <option value="medium" ${c.priority === "medium" ? "selected" : ""}>中</option>
+    <option value="low" ${c.priority === "low" ? "selected" : ""}>低</option>
+  </select>
+
+  <button onclick="jumpToComment('${c.timestamp}', '${thread}')">💬</button>
+</li>
+
+      `
+        )
+        .join("")}
+    </ul>
+  `;
+
+  windows.appendChild(win);
+  setTimeout(() => enableSortable(thread), 0);
+  return;
+}
+
+
+    // ▼ 3) 通常スレッド（ALL / @しお / general など）
+    const filtered = t === "ALL" ? data : data.filter(d => d.thread_key === t);
+
+    // 未完了 → 完了 の順に並べ替え
+    const sorted = filtered.sort((a, b) => {
+      if (a.status === "完了" && b.status !== "完了") return 1;
+      if (a.status !== "完了" && b.status === "完了") return -1;
+      return 0;
+    });
+
+    win.innerHTML = sorted
+      .map(d => `
+        <p class="comment ${d.status === '完了' ? 'done' : ''}"
+   ondblclick="editComment('${d.timestamp}', '${d.user}', '${d.comment.replace(/'/g, "\\'")}')"
+   onclick="completeComment('${d.timestamp}', '${d.user}')">
+
+  <b>${d.user}</b>: ${d.comment}
+
+  <button onclick="addToChecklist('${d.thread_key}', '${d.timestamp}', '${d.user}', '${d.comment.replace(/'/g, "\\'")}')">＋</button>
+
+  <button onclick="jumpToTask('${d.timestamp}')">📝</button>
+</p>
+
+      `)
+      .join("");
+
+    windows.appendChild(win);
+  });
+}
+
+//優先度変更
+async function changePriority(timestamp, priority) {
+  await fetch(GAS_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "priority",
+      timestamp,
+      priority
+    })
+  });
+
+  load();
+}
+//コメントへジャンプ
+function jumpToTask(timestamp) {
+  // どのスレッドのタスクか探す
+  let targetThread = null;
+
+  Object.keys(checklist).forEach(t => {
+    if (checklist[t].some(c => c.timestamp == timestamp)) {
+      targetThread = t;
+    }
+  });
+
+  if (!targetThread) {
+    alert("このコメントのタスクはありません");
+    return;
+  }
+
+  // TODO-スレッドへ切り替え
+  switchTab("TODO-" + targetThread);
+
+  // 少し待ってからスクロール
+  setTimeout(() => {
+    const el = document.querySelector(`[data-timestamp="${timestamp}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 200);
+}
+//コメントへジャンプ
+function jumpToComment(timestamp, thread) {
+  // コメントタブへ切り替え
+  switchTab(thread);
+
+  // 少し待ってからスクロール
+  setTimeout(() => {
+    const el = document.querySelector(`#win-${thread} [onclick*="${timestamp}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 200);
+}
+
+
+function enableSortable(thread) {
+  const el = document.getElementById(`todo-list-${thread}`);
+  if (!el) return;
+
+  Sortable.create(el, {
+    animation: 150,
+    onEnd: function (evt) {
+      const items = checklist[thread];
+      const moved = items.splice(evt.oldIndex, 1)[0];
+      items.splice(evt.newIndex, 0, moved);
+
+      checklist[thread] = items;
+      localStorage.setItem("checklist", JSON.stringify(checklist));
+    }
+  });
+}
+
+
+
+// コメント完了処理
+async function completeComment(timestamp, user) {
+  await fetch(GAS_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "complete_comment",
+      timestamp,
+      user
+    })
+  });
+
+  load();
+}
+
+
+
+function toggleComplete(thread) {
+  const box = document.getElementById("complete-list-" + thread);
+  box.style.display = box.style.display === "none" ? "block" : "none";
+}
+function editComment(timestamp, user, oldComment) {
+  const span = document.getElementById(`text-${timestamp}-${user}`);
+
+  // すでに編集モードなら無視
+  if (!span) return;
+
+  // 入力ボックスに置き換え
+  span.outerHTML = `
+    <input id="edit-${timestamp}-${user}" 
+           type="text" 
+           value="${oldComment}" 
+           style="width:80%;">
+  `;
+
+  const input = document.getElementById(`edit-${timestamp}-${user}`);
+  input.focus();
+
+  // Enter → 保存
+  input.onkeydown = async (e) => {
+    if (e.key === "Enter") {
+      await saveEdit(timestamp, user, input.value);
+    }
+    if (e.key === "Escape") {
+      // キャンセル → 元に戻す
+      input.outerHTML = `<span id="text-${timestamp}-${user}">${oldComment}</span>`;
+    }
+  };
+}
+async function saveEdit(timestamp, user, newComment) {
+  await fetch(GAS_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "edit",
+      timestamp: timestamp,
+      user: user,
+      new_comment: newComment
+    })
+  });
+
+  load(); // 再読み込み
+}
+
+//　ホッドスレッドの判定と表示
+let commentHistory = [];
+
+commentHistory.push({
+  time: Date.now(),
+  data: latestData
+});
+
+// 直近60秒だけ残す
+commentHistory = commentHistory.filter(h => Date.now() - h.time < 60000);
+
+function isHot(thread) {
+  const recent = commentHistory.flatMap(h => h.data);
+  const count = recent.filter(d => d.thread_key === thread).length;
+  return count >= 10; // 閾値
+}
+
+if (isHot(t)) {
+  tab.innerHTML += " 🔥";
+}
+
+// チェックリスト追加
+let checklist = JSON.parse(localStorage.getItem("checklist") || "[]");
+
+
+function addToChecklist(thread, timestamp, user, comment) {
+  const priority = prompt("優先度（high / medium / low）", "medium") || "medium";
+
+  fetch(GAS_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      mode: "add_check",
+      thread,
+      timestamp,
+      user,
+      comment,
+      order: checklist[thread]?.length || 0,
+      priority
+    })
+  }).then(load);
+}
+
+
+
+Object.keys(checklist).forEach(t => {
+  if (!threads.includes("TODO-" + t)) {
+    threads.push("TODO-" + t);
+  }
+});
+
+
+
+
+
+
+
+</script>
+
+</body>
+</html>
